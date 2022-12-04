@@ -1,0 +1,477 @@
+---
+title: "Assigmwent"
+output: html_document
+date: "2022-10-26"
+---
+#Step 1:
+The IMDB dataset
+IMDB movie reviews is a labeled data set available within the text2vec package. This data set
+consists of 5000 IMDB movie reviews, specifically selected for sentiment analysis. The sentiment
+of the reviews is binary, meaning an IMDB rating < 5 results in a sentiment score of 0, and a rating
+>=7 has a sentiment score of 1. No individual movie has more than 30 reviews.
+Load the IMDB data set and split it into training (80%) and test (20%) sets.
+
+```{r}
+
+```
+
+
+```{r}
+library(tidyverse)
+library(text2vec) # our dataset comes from this package
+library(tidytext) # text transformation
+library(wordcloud)
+library(SnowballC) 
+# load an example dataset from text2vec
+data("movie_review")
+movie_review <- as_tibble(movie_review)
+head(movie_review)
+
+#1 is good 0 is bad
+
+```
+
+
+Splitting data into train and test set (4000 reviews for train, 1000 reviews for test)
+
+```{r}
+
+## 80% of the sample size
+smp_size <- floor(0.80 * nrow(movie_review))
+
+## set the seed to make your partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(movie_review)), size = smp_size)
+
+train <- movie_review[train_ind, ]
+test<- movie_review[-train_ind, ]
+
+
+head(train)
+```
+
+
+#Step 2:
+Document-term matrices
+Term frequency (TF) is the measurement of how frequently a term occurs within a document.
+Term frequency inverse document frequency (TFiDF) is a statistical measure that evaluates how
+relevant a word is to a document in a collection of documents. TFiDF is a bag-of-words method
+for vector representation of text data.
+Create two document-term matrices (dtms) with TF and TFiDF representations.
+
+
+
+Counting total terms in the train set
+
+```{r}
+words <- train %>%
+  unnest_tokens(tokens, input = review ) %>%
+  count(id, tokens, sort = TRUE)
+
+
+total_words <- words %>% 
+  group_by(id) %>% 
+  summarize(total = sum(n))
+
+
+words <- left_join(words, total_words)
+head(words)
+
+```
+
+
+Editing and adding some terms to our stop world dictionary
+```{r}
+#Editing stop word dictionary
+df_stopwords <- stop_words  %>%
+  
+  #Adding a word to df_stopwords
+  add_row(word= "br",lexicon="yo")  %>%
+  #Adding a word to df_stopwords
+  add_row(word= "<br",lexicon="yo")  %>%
+  #Adding a word to df_stopwords
+  add_row(word= "/><br",lexicon="yo")  %>%
+  #Adding a word to df_stopwords
+  add_row(word= "!",lexicon="yo")  %>%
+  #Adding a word to df_stopwords
+  add_row(word= "/",lexicon="yo")   %>%
+    #Adding a word to df_stopwords
+  add_row(word= "///",lexicon="yo")   %>%
+   #Adding a word to df_stopwords
+  add_row(word= "?",lexicon="yo")  %>%
+ #Adding a word to df_stopwords
+  add_row(word= "movie",lexicon="yo")   %>%
+   #Adding a word to df_stopwords
+  add_row(word= "film",lexicon="yo")
+
+
+```
+
+
+
+Removing stop words with antijoin
+
+
+```{r}
+#Delete from words stop words
+words = anti_join(words,df_stopwords, by =c("tokens"="word"), copy = TRUE)
+head(words)
+```
+
+Visualizaing top words without stop words
+```{r}
+conteos = words %>%
+  group_by(tokens)  %>%
+  summarise(conteo = n())  %>%
+  arrange(desc(conteo))
+
+top_50 = head(conteos,50)
+head(top_50)
+
+
+ggplot(top_50, aes(x= reorder(tokens, conteo), y= conteo)) + geom_col() + coord_flip()
+
+
+```
+
+Steming words and joining
+
+```{r}
+stems = SnowballC::wordStem(words$tokens,language = "english")
+
+stems = as.data.frame(stems)
+
+conteos = stems %>%
+  group_by(stems)  %>%
+  summarise(conteo = n())  %>%
+  arrange(desc(conteo))
+
+top_50 = head(conteos,50)
+
+
+
+ggplot(top_50, aes(x= reorder(stems, conteo), y= conteo)) + geom_col() + coord_flip()
+
+stem_words = cbind(words,stems)
+head(stem_words)
+remove(words) 
+remove(stems)  
+remove(top_50)  
+```
+
+
+
+Creating tf-idf 
+```{r}
+tf_idf <- stem_words %>%
+  bind_tf_idf(stems, id, n)
+
+head(tf_idf)
+
+
+
+```
+Creating our own scores from tf and idf respectively
+
+
+```{r}
+
+stems_sen = tf_idf %>%
+  inner_join(movie_review) %>%
+  group_by(stems) %>%
+  summarise(tf = mean(tf), tfidf = mean(tf_idf), sentiment = round(mean(sentiment),2) ) %>%
+  arrange(desc(tf))
+
+#Normalizing sentiments to negative and positive
+stems_sen <- mutate(stems_sen,sentiment_real = (sentiment -1) + (sentiment ))
+stems_sen <- mutate(stems_sen,tfsentiment = sentiment_real * tf,tfidfsentiment = sentiment_real * tfidf )
+top_50 = head(stems_sen,70)
+
+head(stems_sen)
+
+ggplot(top_50 , aes(x= reorder(stems, tfsentiment), y= tfsentiment, fill = as.factor(sentiment))) + geom_col() + coord_flip()
+```
+
+
+
+Joining scores with the original stem df
+
+```{r}
+df = inner_join(stem_words,stems_sen)
+df_id = inner_join(df,movie_review, by = c("id"))
+
+head(df_id)
+
+```
+
+Groping by id, assigning a column of sum of tfsentiment, tfidfsentiment
+
+```{r}
+df_scored = df_id %>%
+  group_by(id)  %>%
+  summarise(tfscore = mean(tfsentiment), tfidfscore = mean(tfidfsentiment))
+head(df_scored)
+
+df_scored_sen = inner_join(df_scored,movie_review, by = c("id"))
+head(df_scored_sen)
+```
+
+View of some top comments according to our score
+
+
+```{r}
+ # arrange the average sentiment score in descending order
+
+or=  arrange(df_scored_sen,desc(tfidfscore)) 
+
+# filter happiest reviews
+movie_review %>% 
+  filter(id %in% head(or$id, 3)) %>% 
+  pull(review)
+```
+
+
+
+#TREATING TEST DATA BY SEPARATELY
+
+
+```{r}
+words <- test %>%
+  unnest_tokens(tokens, input = review ) %>%
+  count(id, tokens, sort = TRUE)
+
+
+total_words <- words %>% 
+  group_by(id) %>% 
+  summarize(total = sum(n))
+
+
+words <- left_join(words, total_words)
+head(words)
+
+#Delete from words stop words , con copy se modifica el primer df
+words = anti_join(words,df_stopwords, by =c("tokens"="word"), copy = TRUE)
+
+
+#Stemizing test set
+stems = SnowballC::wordStem(words$tokens,language = "english")
+
+stems = as.data.frame(stems)
+
+
+
+#Adding stems to test set
+stem_words = cbind(words,stems)
+
+remove(words) 
+remove(stems)  
+
+
+
+#grading test stems with train set stems scores
+df = inner_join(stem_words,stems_sen)
+df_id = inner_join(df,movie_review, by = c("id"))
+
+
+#Gruping by id and getting scores
+df_scored = df_id %>%
+  group_by(id)  %>%
+  summarise(tfscore = mean(tfsentiment), tfidfscore = mean(tfidfsentiment))
+head(df_scored)
+
+
+df_scored_sen_test = inner_join(df_scored,movie_review, by = c("id"))
+df_scored_sen_test
+```
+
+
+Creating x and y dfs for each case
+
+```{r}
+
+train_tf_x <- select(df_scored_sen, tfscore, sentiment)
+#train_tf_y <- select(train_tf, sentiment.y)
+
+test_tf_x <- select(df_scored_sen_test, tfscore)
+test_tf_y <- select(df_scored_sen_test, sentiment)
+
+train_tfidf_x <- select(df_scored_sen, tfidfscore, sentiment)
+#train_tfidf_y <- select(train_tfidf, sentiment.y)
+
+test_tfidf_x <- select(df_scored_sen_test, tfidfscore)
+test_tfidf_y <- select(df_scored_sen_test, sentiment)
+
+remove(tfidf_df_sen)   
+remove(tf_df_sen)
+remove(tf_df)
+remove(tfidf_df)
+
+head(train_tf_x)
+```
+
+
+#Step 3: 
+Supervised learning: classification
+The two different document-term matrices you created can serve as input to a classifier, predicting
+the sentiment.
+Select two supervised learning methods for classifying the sentiments.
+You can choose any supervised learning method. Some options are:
+
+- Naïve Bayes (e.g., package “e1071”)
+- Support Vector Machines (e.g., package “e1071”)
+- Regularized logistic regression (e.g., package “glmnet”)
+
+
+# Selected Models: 
+- Logistic Regression
+- Random Forest
+
+
+
+```{r}
+# Loading package
+library(e1071)
+library(caTools)
+library(caret)
+library(glmnet)
+set.seed(120)  # Setting Seed
+```
+
+Step 4: Train and compare models
+Train your models on both TF and TFiDF dtms training data and compare their AUC and loss values on the test set.
+
+Train and confusion matrix
+
+```{r}
+#Tf Logistic regression 
+model <- glm(sentiment ~.,family=binomial(link='logit'),data=train_tf_x)
+
+#TEST SET
+probs = predict(model, newdata = test_tf_x, type = "response")
+predicted.classes <- ifelse(probs > 0.5, 1, 0)
+# Confusion Matrix
+cm <- table(test_tf_y$sentiment, predicted.classes)
+print("Logistic regresion Tf model result in test set")
+cm
+
+Accuracy_1 = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1]) 
+Accuracy_1 
+#calculate AUC
+library(pROC)
+auc(test_tf_y$sentiment, predicted.classes)
+
+#Plotting
+plot(roc(test_tf_y$sentiment, predicted.classes), auc.polygon=TRUE)
+```
+
+
+```{r}
+#Tfidf Logistic regression 
+model <- glm(sentiment ~.,family=binomial(link='logit'),data=train_tfidf_x)
+
+#TEST SET
+probs = predict(model, newdata = test_tfidf_x, type = "response")
+predicted.classes <- ifelse(probs > 0.5, 1, 0)
+# Confusion Matrix
+cm <- table(test_tfidf_y$sentiment, predicted.classes)
+print("Logistic regresion Tfidf model result in test set")
+cm
+Accuracy_2 = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1]) 
+Accuracy_2 
+#calculate AUC
+library(pROC)
+auc(test_tfidf_y$sentiment, predicted.classes)
+
+#Plotting
+plot(roc(test_tfidf_y$sentiment, predicted.classes), auc.polygon=TRUE)
+```
+
+
+```{r}
+# Random forest tf
+
+#TEST SET
+library(randomForest)
+rf <- randomForest(as.factor(sentiment) ~ ., data = train_tf_x,  proximity=TRUE)
+
+predicted.classes = predict(rf, newdata = test_tf_x)
+# Confusion Matrix
+cm <- table(test_tf_y$sentiment, predicted.classes)
+print("Rf for Tf model result in test set")
+cm
+Accuracy_3 = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1]) 
+Accuracy_3 
+auc(test_tf_y$sentiment, as.numeric(predicted.classes))
+
+#Plotting
+plot(roc(test_tf_y$sentiment, as.numeric(predicted.classes)), auc.polygon=TRUE)
+```
+
+
+```{r}
+# Random forest tfidf
+
+#TEST SET
+library(randomForest)
+rf <- randomForest(as.factor(sentiment) ~ ., data = train_tfidf_x,  proximity=TRUE)
+
+predicted.classes = predict(rf, newdata = test_tfidf_x)
+# Confusion Matrix
+cm <- table(test_tfidf_y$sentiment, predicted.classes)
+print("Rf for Tf model result in test set")
+cm
+Accuracy_4 = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1]) 
+Accuracy_4
+auc(test_tfidf_y$sentiment, as.numeric(predicted.classes))
+
+#Plotting
+plot(roc(test_tfidf_y$sentiment, as.numeric(predicted.classes)), auc.polygon=TRUE)
+
+```
+
+Step 5: Report & reflect
+Report the results in a table or a nice plot, briefly explain them, and make a conclusion about model performance.
+
+
+```{r}
+
+
+Model <- c("tf Logistic Regression", "tf-idf Logistic Regression", "tf Random Forest", "tf-idf Random Forest")
+   
+Accuracy <- c(Accuracy_1, Accuracy_2, Accuracy_3, Accuracy_4)
+   
+ROC <- c(0.8383, 0.8068, 0.8201, 0.7833)
+
+    
+class.df<- data.frame(Model, Accuracy, 
+                      ROC)
+
+class.df
+```
+
+#Explanation:
+
+For this project a new approach was proposed since the introduction of large sparse matrixes to training algorithms requires a lot of computer resources and doesn't live to good results.
+
+First we preprocess our tokenized data with simple stop words removal and stemming to normalized to a compact format, then we calculate tf and tf-idf for each stem. Then we group by stem and calculate the average tf, itf and sentiment for each stem. In a way to reduce dimensionality, we normalize the average sentiment of each stem from -1 to 1 to give a negative and positive meaning to each value. Our calculated parameters are the average tf and tfidf multiplied by normalized sentiment (called score tf and score tfidf).
+
+Now we have created our own Lexicon generated directly from the training data. It  collects tf,tfidf and sentiment.
+
+Next, we join our originals stems to our created lexicons, and we compute the average score of tf and tfidf for each id in the training data.
+
+Finally, we prepared the test data computing its average score based in the train created Lexicon, new words are simply ignored by the join.
+
+The data is ready to be trained and tested. We used the models: Logistic Regression and Random Forests.
+
+
+From the 4 tested models, the one that performs the best in the test set is the Tf Logistic Regression model, one hypothesis of why it performs better than tf-idf is because the removal of stop words deal with the repetition of non-wanted common words such as "the"," "in" ,etc. Furthermore, frequency is more effective for this cases in which we have short documents (reviews). In case the documents were bigger and more varied like in books, surely we will expect an outperform for tf-idf.
+
+Having an 83% accuracy on test set is in our opinion a great result  considering non-external Lexicons were used, just insights from the data and word frequencies and their relations with sentiments tagged in the reviews. 
+
+The models proposed worked well, even thought, some new reviews with words that didn't were in the train set were introduced.
+
+
+
+
+
+
